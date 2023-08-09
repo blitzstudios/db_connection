@@ -125,17 +125,17 @@ defmodule DBConnection.ConnectionPool do
   end
 
   def handle_info({:timeout, idle, {time, last_sent}}, {_, _, %{idle: idle}, _metrics} = data) do
-    {status, queue, codel} = data
+    {status, queue, codel, metrics} = data
 
     # If no queue progress since last idle check oldest connection
     case :ets.first(queue) do
       {sent, holder} = key when sent <= last_sent and status == :ready ->
         :ets.delete(queue, key)
-        ping(holder, queue, start_idle(time, last_sent, codel))
+        ping(holder, queue, start_idle(time, last_sent, codel), metrics)
       {sent, _} ->
-        {:noreply, {status, queue, start_idle(time, sent, codel)}}
+        {:noreply, {status, queue, start_idle(time, sent, codel), metrics}}
       _ ->
-        {:noreply, {status, queue, start_idle(time, time, codel)}}
+        {:noreply, {status, queue, start_idle(time, time, codel), metrics}}
     end
   end
 
@@ -165,16 +165,15 @@ defmodule DBConnection.ConnectionPool do
     :ets.select_delete(queue, [{match, guards, [true]}])
   end
 
-  defp ping(holder, queue, codel) do
+  defp ping(holder, queue, codel, metrics) do
     Holder.handle_ping(holder)
-    {:noreply, {:ready, queue, codel}}
+    {:noreply, {:ready, queue, codel, metrics}}
   end
 
   defp handle_checkin(holder, now, {:ready, queue, codel, metrics} = _data) do
     :ets.insert(queue, {{now, holder}})
-    {:noreply, {:ready, queue, codel, %{metrics | active_connections: metrics.active_connections - 1}}}
+    {:noreply, {:ready, queue, codel, metrics}}
   end
-
 
   defp handle_checkin(holder, now, {:busy, queue, codel, metrics}) do
     # we're checking back in, but the queue is still busy, so we don't we've freed a connection
