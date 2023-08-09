@@ -172,15 +172,13 @@ defmodule DBConnection.ConnectionPool do
 
   defp handle_checkin(holder, now, {:ready, queue, codel, metrics} = _data) do
     :ets.insert(queue, {{now, holder}})
-    {:noreply, {:ready, queue, codel, metrics}}
+    {:noreply, {:ready, queue, codel, decrement_or_zero_active_conn(metrics)}}
   end
 
   defp handle_checkin(holder, now, {:busy, queue, codel, metrics}) do
-    # we're checking back in, but the queue is still busy, so we don't we've freed a connection
-    # so we can -1 active
+    metrics = decrement_or_zero_active_conn(metrics)
     dequeue(now, holder, queue, codel, metrics)
   end
-
 
   defp dequeue(time, holder, queue, codel, metrics) do
     # the we're selecting a thing off the queue, so add one to the waiting
@@ -206,7 +204,7 @@ defmodule DBConnection.ConnectionPool do
       :"$end_of_table" ->
         codel = %{codel | next: next, delay: 0, slow: slow?}
         :ets.insert(queue, {{time, holder}})
-        {:noreply, {:ready, queue, codel, %{metrics | waiting_connections: metrics.waiting_connections + 1}}}
+        {:noreply, {:ready, queue, codel, metrics}}
     end
   end
 
@@ -217,7 +215,7 @@ defmodule DBConnection.ConnectionPool do
         go(time - sent, from, time, holder, queue, codel, metrics)
       :"$end_of_table" ->
         :ets.insert(queue, {{time, holder}})
-        {:noreply, {:ready, queue, %{codel | delay: 0}, %{metrics | waiting_connections: metrics.waiting_connections + 1}}}
+        {:noreply, {:ready, queue, %{codel | delay: 0}, metrics}}
     end
   end
 
@@ -232,7 +230,7 @@ defmodule DBConnection.ConnectionPool do
         go(time - sent, from, time, holder, queue, codel, metrics)
       :"$end_of_table" ->
         :ets.insert(queue, {{time, holder}})
-        {:noreply, {:ready, queue, %{codel | delay: 0}, %{metrics | waiting_connections: metrics.waiting_connections + 1}}}
+        {:noreply, {:ready, queue, %{codel | delay: 0}, metrics}}
     end
   end
 
@@ -272,5 +270,10 @@ defmodule DBConnection.ConnectionPool do
     timeout = now + interval
     idle = :erlang.start_timer(timeout, self(), {timeout, last_sent}, [abs: true])
     %{codel | idle: idle}
+  end
+
+  defp decrement_or_zero_active_conn(metrics) do
+    active_connections = Enum.max([metrics.active_connections - 1, 0])
+    %{metrics | active_connections: active_connections}
   end
 end
