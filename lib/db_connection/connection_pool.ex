@@ -45,7 +45,7 @@ defmodule DBConnection.ConnectionPool do
               next: now, poll: nil, idle_interval: idle_interval, idle: nil}
     codel = start_idle(now, now, start_poll(now, now, codel))
 
-    metrics = :counters.new(2, [])
+    metrics = :counters.new(2, [:write_concurrency])
     # when the pool starts up, it checks out and should decrement this to 0
     :counters.put(metrics, @active_counter_idx, pool_size)
 
@@ -143,7 +143,7 @@ defmodule DBConnection.ConnectionPool do
     case :ets.first(queue) do
       {sent, holder} = key when sent <= last_sent and status == :ready ->
         :ets.delete(queue, key)
-        :counters.sub(metrics, @waiting_counter_idx, 1)
+        :counters.add(metrics, @active_counter_idx, 1)
         ping(holder, queue, start_idle(time, last_sent, codel), metrics)
       {sent, _} ->
         {:noreply, {status, queue, start_idle(time, sent, codel), metrics}}
@@ -157,8 +157,7 @@ defmodule DBConnection.ConnectionPool do
       %{delay: min_delay, next: next, target: target, interval: interval}
           when time >= next and min_delay > target ->
         codel = %{codel | slow: true, delay: delay, next: time + interval}
-        drop_slow(time, target * 2, queue)
-        :counters.sub(metrics, @waiting_counter_idx, 1)
+        drop_slow(time, target * 2, queue, metrics)
         {:noreply, {:busy, queue, codel, metrics}}
       %{next: next, interval: interval} when time >= next ->
         codel = %{codel | slow: false, delay: delay, next: time + interval}
@@ -168,12 +167,13 @@ defmodule DBConnection.ConnectionPool do
     end
   end
 
-  defp drop_slow(time, timeout, queue) do
+  defp drop_slow(time, timeout, queue, metrics) do
     min_sent = time - timeout
     match = {{:"$1", :_, :"$2"}}
     guards = [{:<, :"$1", min_sent}]
     select_slow = [{match, guards, [{{:"$1", :"$2"}}]}]
     for {sent, from} <- :ets.select(queue, select_slow) do
+      :counters.sub(metrics, @waiting_counter_idx, 1)
       drop(time - sent, from)
     end
     :ets.select_delete(queue, [{match, guards, [true]}])
@@ -196,7 +196,6 @@ defmodule DBConnection.ConnectionPool do
   end
 
   defp dequeue(time, holder, queue, codel, metrics) do
-    # the we're selecting a thing off the queue, so add one to the waiting
     case codel do
       %{next: next, delay: delay, target: target} when time >= next  ->
         dequeue_first(time, delay > target, holder, queue, codel, metrics)
