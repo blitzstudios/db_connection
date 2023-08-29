@@ -8,6 +8,8 @@ defmodule DBConnection.ConnectionPool do
   use GenServer
   alias DBConnection.Holder
 
+  @active_counter_idx 1
+  @waiting_counter_idx 2
   @queue_target 50
   @queue_interval 1000
   @idle_interval 1000
@@ -31,6 +33,13 @@ defmodule DBConnection.ConnectionPool do
   @doc false
   def disconnect_all(pool, interval, _opts) do
     GenServer.call(pool, {:disconnect_all, interval}, :infinity)
+  end
+
+  @doc """
+  Returns connection metrics in the shape of %{active: N, waiting: N}
+  """
+  def get_connection_metrics(pid) do
+    GenServer.call(pid, :get_metrics)
   end
 
   ## GenServer api
